@@ -1,7 +1,7 @@
 {
   "name": "motor-gamao",
-  "version": "1.0.0",
-  "description": "Servidor multiplayer para Gamão (Backgammon)",
+  "version": "2.0.0",
+  "description": "Servidor multiplayer para Gamão com regras oficiais",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
