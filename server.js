@@ -6,44 +6,39 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: "*" }
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
-// --- CLASSE GAMAO (Backgammon) ---
+// ========== CLASSE GAMAO (REGRAS OFICIAIS) ==========
 class Gamao {
     constructor() {
         this.reset();
     }
 
     reset() {
-        // Representação do tabuleiro: 26 posições (0-23 pontos, 24 barra do jogador 1, 25 barra do jogador 2)
-        // Índices 0-23: pontos do tabuleiro. Valor positivo = peças do jogador 1 (branco/preto), negativo = jogador 2 (vermelho)
+        // Tabuleiro: índices 0-23 (pontos). Valor positivo = peças do jogador 1 (vermelho/preto), negativo = jogador 2 (branco)
         this.board = Array(24).fill(0);
-        this.bar = [0, 0]; // Peças na barra: índice 0 = jogador 1 (sul), 1 = jogador 2 (norte)
-        this.home = [0, 0]; // Peças removidas (fora do tabuleiro)
+        this.bar = [0, 0];        // Peças na barra: índice 0 = jogador 1, 1 = jogador 2
+        this.home = [0, 0];       // Peças já removidas
+        // Posição inicial padrão
+        this.board[0] = 2;
+        this.board[11] = -5;
+        this.board[16] = -3;
+        this.board[18] = -5;
+        this.board[5] = -5;
+        this.board[12] = 5;
+        this.board[7] = -3;
+        this.board[23] = -2;
 
-        // Setup inicial padrão do Gamão
-        this.board[0] = 2;   // Jogador 1
-        this.board[11] = -5;  // Jogador 2
-        this.board[16] = -3;  // Jogador 2
-        this.board[18] = -5;  // Jogador 2
-        this.board[5] = -5;   // Jogador 2
-        this.board[12] = 5;   // Jogador 1
-        this.board[7] = -3;   // Jogador 2
-        this.board[23] = -2;  // Jogador 2
-
-        this.turn = 1; // 1 para jogador 1 (sul/vermelho/preto), -1 para jogador 2 (norte/branco) - usaremos 1 e -1 internamente
+        this.turn = 1;            // 1 = jogador 1, -1 = jogador 2
         this.dice = [0, 0];
         this.diceUsed = [false, false];
-        this.rollPhase = true; // true = precisa rolar dados, false = fase de movimento
+        this.rollPhase = true;
         this.gameOver = false;
         this.winner = null;
         this.doublingCube = 1;
-        this.doublingOwner = null; // quem pode dobrar
+        this.doublingOwner = null;
     }
 
-    // Converte o estado para um objeto simples para envio
     getState() {
         return {
             board: [...this.board],
@@ -60,159 +55,282 @@ class Gamao {
         };
     }
 
-    // Rola dois dados (valores 1-6)
     rollDice() {
         if (!this.rollPhase || this.gameOver) return null;
         const d1 = Math.floor(Math.random() * 6) + 1;
         const d2 = Math.floor(Math.random() * 6) + 1;
-        this.dice = [d1, d2];
+        this.dice = [d1, d2].sort((a,b) => a - b);
         this.diceUsed = [false, false];
         this.rollPhase = false;
-        // Se os dados forem iguais, são considerados 4 movimentos (ainda lidamos com dois valores, mas a UI pode interpretar)
         return [...this.dice];
     }
 
-    // Valida se um movimento é legal
-    isValidMove(from, to, player) {
-        if (this.gameOver) return false;
-        if (this.turn !== player) return false;
-        if (this.rollPhase) return false;
-
-        // Verifica se há peças na barra que precisam ser movidas primeiro
+    // Retorna array de movimentos legais para o jogador atual
+    getLegalMoves(player) {
+        if (this.rollPhase || this.gameOver || this.turn !== player) return [];
+        const moves = [];
         const barIdx = player === 1 ? 0 : 1;
-        if (this.bar[barIdx] > 0) {
-            // Só pode mover da barra
-            if (from !== 24 + barIdx) return false;
-        } else {
-            // Não pode mover da barra se não houver peças lá
-            if (from === 24 || from === 25) return false;
-        }
+        const hasBar = this.bar[barIdx] > 0;
 
-        // Verifica se a peça pertence ao jogador
-        let pieceCount = 0;
-        if (from === 24 || from === 25) {
-            pieceCount = this.bar[from - 24];
-        } else {
-            pieceCount = this.board[from];
-        }
-        if ((player === 1 && pieceCount <= 0) || (player === -1 && pieceCount >= 0)) return false;
-
-        // Verifica se o destino é válido (0-23 ou home)
-        if (to < 0 || to > 23) {
-            // Verifica se pode remover peças (bearing off)
-            if (!this.canBearOff(player)) return false;
-            // Movimento para fora do tabuleiro é representado por to = -1
-            if (to !== -1) return false;
-        }
-
-        // Calcula a distância percorrida
-        let distance;
-        if (from === 24 || from === 25) {
-            // Da barra: reentrada na casa 24 - from? Na verdade, a reentrada é na casa correspondente ao dado
-            // Simplificação: a distância é validada pelo dado escolhido
-            const entryPoint = player === 1 ? to : 23 - to;
-            distance = player === 1 ? to + 1 : 24 - to;
-        } else {
-            distance = player === 1 ? to - from : from - to;
-        }
-
-        // Verifica se a distância corresponde a um dos dados disponíveis
-        let diceIndex = -1;
-        for (let i = 0; i < this.dice.length; i++) {
-            if (!this.diceUsed[i] && this.dice[i] === distance) {
-                diceIndex = i;
-                break;
+        // Se há peças na barra, só pode mover de lá
+        if (hasBar) {
+            for (let dieIdx = 0; dieIdx < 2; dieIdx++) {
+                if (this.diceUsed[dieIdx]) continue;
+                const die = this.dice[dieIdx];
+                const to = player === 1 ? die - 1 : 24 - die;
+                if (this.isValidMove(24 + barIdx, to, player, dieIdx)) {
+                    moves.push({ from: 24 + barIdx, to, dieIndices: [dieIdx] });
+                }
             }
+            return moves;
         }
-        // Se não encontrou, verifica se pode usar um valor maior para bearing off
-        if (diceIndex === -1 && to === -1) {
-            // No bearing off, pode usar um dado maior se for a peça mais distante
-            // Simplificaremos: permite se o dado for maior ou igual
-            for (let i = 0; i < this.dice.length; i++) {
-                if (!this.diceUsed[i] && this.dice[i] >= distance) {
-                    diceIndex = i;
-                    break;
+
+        // Movimentos normais ou bearing off
+        const homeStart = player === 1 ? 18 : 0;
+        const homeEnd = player === 1 ? 23 : 5;
+        const canBearOff = this.canBearOff(player);
+
+        // Para cada combinação possível de dados (um ou dois, dependendo se são iguais)
+        const diceOptions = this.generateDiceOptions();
+
+        for (let opt of diceOptions) {
+            const dieValues = opt.values;
+            const dieIndices = opt.indices;
+            // Gera sequências de movimentos usando esses valores
+            this.generateMoveSequences(player, dieValues, dieIndices, [], moves);
+        }
+
+        // Filtra movimentos duplicados e prioriza usar o maior número de dados possível
+        const maxDiceUsed = Math.max(...moves.map(m => m.dieIndices.length), 0);
+        return moves.filter(m => m.dieIndices.length === maxDiceUsed);
+    }
+
+    generateDiceOptions() {
+        if (this.dice[0] === this.dice[1]) {
+            // Dados iguais: quatro movimentos
+            return [{ values: [this.dice[0], this.dice[0], this.dice[0], this.dice[0]], indices: [0,1,0,1] }];
+        } else {
+            // Duas ordens possíveis
+            return [
+                { values: [this.dice[0], this.dice[1]], indices: [0,1] },
+                { values: [this.dice[1], this.dice[0]], indices: [1,0] }
+            ];
+        }
+    }
+
+    generateMoveSequences(player, remainingDice, remainingIndices, currentSeq, moves) {
+        if (remainingDice.length === 0) {
+            if (currentSeq.length > 0) {
+                moves.push({ moves: currentSeq, dieIndices: remainingIndices });
+            }
+            return;
+        }
+
+        const die = remainingDice[0];
+        const dieIdx = remainingIndices[0];
+        const legalSingleMoves = this.getSingleMoves(player, die, dieIdx);
+        if (legalSingleMoves.length === 0) {
+            // Se não há movimento possível com este dado, não pode usá-lo; a sequência termina aqui
+            if (currentSeq.length > 0) {
+                moves.push({ moves: currentSeq, dieIndices: remainingIndices.slice(0, currentSeq.length) });
+            }
+            return;
+        }
+
+        for (let move of legalSingleMoves) {
+            // Simula o movimento para verificar o estado resultante
+            const simState = this.simulateMove(move.from, move.to, player);
+            const simGame = new Gamao();
+            simGame.board = [...simState.board];
+            simGame.bar = [...simState.bar];
+            simGame.home = [...simState.home];
+            simGame.turn = player;
+            // Gera recursivamente os próximos movimentos
+            simGame.generateMoveSequences(player, remainingDice.slice(1), remainingIndices.slice(1), 
+                [...currentSeq, move], moves);
+        }
+    }
+
+    getSingleMoves(player, die, dieIdx) {
+        const moves = [];
+        const barIdx = player === 1 ? 0 : 1;
+        const hasBar = this.bar[barIdx] > 0;
+
+        if (hasBar) {
+            const to = player === 1 ? die - 1 : 24 - die;
+            if (this.isValidMove(24 + barIdx, to, player, dieIdx)) {
+                moves.push({ from: 24 + barIdx, to });
+            }
+            return moves;
+        }
+
+        const homeStart = player === 1 ? 18 : 0;
+        const homeEnd = player === 1 ? 23 : 5;
+        const canBearOff = this.canBearOff(player);
+
+        // Movimentos a partir de pontos com peças do jogador
+        for (let from = 0; from < 24; from++) {
+            const count = this.board[from];
+            if ((player === 1 && count <= 0) || (player === -1 && count >= 0)) continue;
+
+            const to = player === 1 ? from + die : from - die;
+            if (to >= 0 && to <= 23) {
+                if (this.isValidMove(from, to, player, dieIdx)) {
+                    moves.push({ from, to });
+                }
+            } else if (canBearOff) {
+                // Bearing off: para sair, precisa de valor exato ou ser a peça mais distante
+                const requiredDie = player === 1 ? 24 - from : from + 1;
+                if (die === requiredDie) {
+                    if (this.isValidMove(from, -1, player, dieIdx)) {
+                        moves.push({ from, to: -1 });
+                    }
+                } else if (die > requiredDie) {
+                    // Verifica se não há peças mais distantes que exigiriam um dado maior
+                    let hasFurther = false;
+                    for (let i = 0; i < 24; i++) {
+                        const cnt = this.board[i];
+                        if ((player === 1 && cnt > 0) || (player === -1 && cnt < 0)) {
+                            const dist = player === 1 ? 24 - i : i + 1;
+                            if (dist > requiredDie) { hasFurther = true; break; }
+                        }
+                    }
+                    if (!hasFurther && this.isValidMove(from, -1, player, dieIdx)) {
+                        moves.push({ from, to: -1 });
+                    }
                 }
             }
         }
-        if (diceIndex === -1) return false;
+        return moves;
+    }
 
-        // Verifica se o ponto de destino está bloqueado (2 ou mais peças do oponente)
-        if (to >= 0 && to <= 23) {
-            const destCount = this.board[to];
-            if ((player === 1 && destCount < -1) || (player === -1 && destCount > 1)) {
-                return false;
+    isValidMove(from, to, player, dieIdx) {
+        if (this.gameOver) return false;
+        if (this.diceUsed[dieIdx]) return false;
+
+        const barIdx = player === 1 ? 0 : 1;
+        const hasBar = this.bar[barIdx] > 0;
+        if (hasBar && from !== 24 + barIdx) return false;
+        if (!hasBar && (from === 24 || from === 25)) return false;
+
+        // Verifica se a peça pertence ao jogador
+        let pieceCount;
+        if (from === 24 || from === 25) pieceCount = this.bar[from - 24];
+        else pieceCount = this.board[from];
+        if ((player === 1 && pieceCount <= 0) || (player === -1 && pieceCount >= 0)) return false;
+
+        // Se destino é fora (bearing off)
+        if (to === -1) {
+            if (!this.canBearOff(player)) return false;
+            const requiredDie = player === 1 ? 24 - from : from + 1;
+            const die = this.dice[dieIdx];
+            if (die < requiredDie) return false;
+            if (die > requiredDie) {
+                // Verifica se não há peças mais distantes
+                for (let i = 0; i < 24; i++) {
+                    const cnt = this.board[i];
+                    if ((player === 1 && cnt > 0) || (player === -1 && cnt < 0)) {
+                        const dist = player === 1 ? 24 - i : i + 1;
+                        if (dist > requiredDie) return false;
+                    }
+                }
             }
+            return true;
         }
+
+        // Movimento normal
+        const die = this.dice[dieIdx];
+        let distance;
+        if (from === 24 || from === 25) {
+            distance = player === 1 ? to + 1 : 24 - to;
+            if (distance !== die) return false;
+        } else {
+            distance = player === 1 ? to - from : from - to;
+            if (distance !== die) return false;
+        }
+
+        // Verifica bloqueio
+        const destCount = this.board[to];
+        if ((player === 1 && destCount < -1) || (player === -1 && destCount > 1)) return false;
 
         return true;
     }
 
     canBearOff(player) {
-        // Verifica se todas as peças do jogador estão no seu quadrante interno (home board)
         const homeStart = player === 1 ? 18 : 0;
         const homeEnd = player === 1 ? 23 : 5;
         for (let i = 0; i < 24; i++) {
-            const count = this.board[i];
-            if ((player === 1 && count > 0) || (player === -1 && count < 0)) {
+            const cnt = this.board[i];
+            if ((player === 1 && cnt > 0) || (player === -1 && cnt < 0)) {
                 if (i < homeStart || i > homeEnd) return false;
             }
         }
         return this.bar[player === 1 ? 0 : 1] === 0;
     }
 
-    // Executa um movimento (sem validação completa, assume que isValidMove foi chamado antes)
-    makeMove(from, to, player) {
-        if (!this.isValidMove(from, to, player)) return false;
-
-        // Marca o dado como usado
-        let distance;
+    simulateMove(from, to, player) {
+        const newBoard = [...this.board];
+        const newBar = [...this.bar];
+        const newHome = [...this.home];
         if (from === 24 || from === 25) {
-            distance = player === 1 ? to + 1 : 24 - to;
+            newBar[from - 24]--;
         } else {
-            distance = player === 1 ? to - from : from - to;
+            player === 1 ? newBoard[from]-- : newBoard[from]++;
         }
-        for (let i = 0; i < this.dice.length; i++) {
-            if (!this.diceUsed[i] && (this.dice[i] === distance || (to === -1 && this.dice[i] >= distance))) {
-                this.diceUsed[i] = true;
-                break;
-            }
-        }
-
-        // Remove a peça da origem
-        if (from === 24 || from === 25) {
-            this.bar[from - 24]--;
-        } else {
-            if (player === 1) this.board[from]--;
-            else this.board[from]++;
-        }
-
-        // Se o destino é fora do tabuleiro, coloca em home
         if (to === -1) {
-            this.home[player === 1 ? 0 : 1]++;
+            newHome[player === 1 ? 0 : 1]++;
         } else {
-            // Verifica captura
-            const destCount = this.board[to];
-            if ((player === 1 && destCount === -1) || (player === -1 && destCount === 1)) {
-                // Manda para a barra
-                this.bar[player === 1 ? 1 : 0]++;
-                this.board[to] = 0;
+            const dest = newBoard[to];
+            if ((player === 1 && dest === -1) || (player === -1 && dest === 1)) {
+                newBar[player === 1 ? 1 : 0]++;
+                newBoard[to] = 0;
             }
-            // Adiciona a peça ao destino
-            if (player === 1) this.board[to]++;
-            else this.board[to]--;
+            player === 1 ? newBoard[to]++ : newBoard[to]--;
+        }
+        return { board: newBoard, bar: newBar, home: newHome };
+    }
+
+    makeMove(moves) {
+        // moves: array de {from, to} na ordem
+        if (!moves || moves.length === 0) return false;
+        const player = this.turn;
+        const diceCopy = [...this.dice];
+        const usedIndices = [];
+
+        for (let move of moves) {
+            const dieValue = player === 1 ? (move.from === 24 ? move.to + 1 : move.to - move.from) :
+                            (move.from === 25 ? 24 - move.to : move.from - move.to);
+            const dieIdx = this.dice.findIndex((v, i) => v === dieValue && !this.diceUsed[i] && !usedIndices.includes(i));
+            if (dieIdx === -1) return false;
+            usedIndices.push(dieIdx);
+
+            // Executa movimento real
+            if (move.from === 24 || move.from === 25) {
+                this.bar[move.from - 24]--;
+            } else {
+                player === 1 ? this.board[move.from]-- : this.board[move.from]++;
+            }
+            if (move.to === -1) {
+                this.home[player === 1 ? 0 : 1]++;
+            } else {
+                const dest = this.board[move.to];
+                if ((player === 1 && dest === -1) || (player === -1 && dest === 1)) {
+                    this.bar[player === 1 ? 1 : 0]++;
+                    this.board[move.to] = 0;
+                }
+                player === 1 ? this.board[move.to]++ : this.board[move.to]--;
+            }
         }
 
-        // Verifica se todos os dados foram usados
+        usedIndices.forEach(idx => this.diceUsed[idx] = true);
         if (this.diceUsed.every(v => v)) {
-            // Fim da rodada, troca turno e volta para fase de rolagem
             this.rollPhase = true;
             this.turn *= -1;
             this.dice = [0, 0];
             this.diceUsed = [false, false];
         }
 
-        // Verifica condição de vitória
+        // Verifica vitória
         if (this.home[0] === 15) {
             this.gameOver = true;
             this.winner = 1;
@@ -220,27 +338,18 @@ class Gamao {
             this.gameOver = true;
             this.winner = -1;
         }
-
         return true;
-    }
-
-    // Obtém movimentos possíveis para o jogador atual (retorna array de {from, to})
-    getPossibleMoves(player) {
-        // Implementação simplificada: retorna movimentos básicos
-        // Em um jogo completo, isso seria mais complexo
-        return [];
     }
 }
 
-// --- GERENCIAMENTO DE SALAS ---
+// ========== GERENCIAMENTO DE SALAS ==========
 let salas = {};
 
 function resetarSalaParaLobby(sala) {
     sala.rodando = false;
     sala.jogo.reset();
     sala.historico = [];
-    sala.ofertasEmpate = {};
-    sala.jogadores.forEach(j => { j.pronto = false; });
+    sala.jogadores.forEach(j => j.pronto = false);
 }
 
 io.on('connection', (socket) => {
@@ -257,8 +366,7 @@ io.on('connection', (socket) => {
                 espectadores: [],
                 rodando: false,
                 jogo: new Gamao(),
-                historico: [],
-                ofertasEmpate: {}
+                historico: []
             };
         }
         const sala = salas[nomeSala];
@@ -269,14 +377,9 @@ io.on('connection', (socket) => {
         }
 
         if (sala.jogadores.length < 2) {
-            const lado = sala.jogadores.length === 0 ? 1 : -1; // 1 = vermelho/preto, -1 = branco
-            sala.jogadores.push({
-                id: socket.id,
-                nome: apelido,
-                pronto: false,
-                lado: lado
-            });
-            socket.emit('definirPapel', { papel: 'jogador', lado: lado });
+            const lado = sala.jogadores.length === 0 ? 1 : -1;
+            sala.jogadores.push({ id: socket.id, nome: apelido, pronto: false, lado });
+            socket.emit('definirPapel', { papel: 'jogador', lado });
         } else {
             sala.espectadores.push({ id: socket.id, nome: apelido });
             socket.emit('definirPapel', { papel: 'espectador' });
@@ -305,24 +408,15 @@ io.on('connection', (socket) => {
         if (sala.jogadores.length === 2 && sala.jogadores.every(j => j.pronto) && !sala.rodando) {
             sala.rodando = true;
             sala.jogo.reset();
-            sala.jogo.rollPhase = true; // Começa com fase de rolagem
-            sala.jogadores.forEach(j => {
-                io.to(j.id).emit('iniciarPartida', { lado: j.lado, estado: sala.jogo.getState() });
-            });
-            sala.espectadores.forEach(e => {
-                io.to(e.id).emit('iniciarPartida', { lado: 'espectador', estado: sala.jogo.getState() });
-            });
-            io.to(socket.sala).emit('estadoLobby', {
-                rodando: true,
-                jogadoresInfo: sala.jogadores.map(j => ({ nome: j.nome, pronto: j.pronto, lado: j.lado })),
-                espectadores: sala.espectadores.map(e => e.nome)
-            });
+            sala.jogadores.forEach(j => io.to(j.id).emit('iniciarPartida', { lado: j.lado, estado: sala.jogo.getState() }));
+            sala.espectadores.forEach(e => io.to(e.id).emit('iniciarPartida', { lado: 'espectador', estado: sala.jogo.getState() }));
+            io.to(socket.sala).emit('estadoLobby', { rodando: true, jogadoresInfo: sala.jogadores.map(j => ({ nome: j.nome, pronto: j.pronto, lado: j.lado })), espectadores: sala.espectadores.map(e => e.nome) });
         }
     });
 
     socket.on('rolarDados', () => {
         const sala = salas[socket.sala];
-        if (!sala || !sala.rodando) return;
+        if (!sala?.rodando) return;
         const jogador = sala.jogadores.find(j => j.id === socket.id);
         if (!jogador || sala.jogo.turn !== jogador.lado || !sala.jogo.rollPhase) return;
         const dice = sala.jogo.rollDice();
@@ -332,33 +426,24 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('moverPeca', ({ from, to }) => {
+    socket.on('moverPecas', ({ moves }) => {
         const sala = salas[socket.sala];
-        if (!sala || !sala.rodando) return;
+        if (!sala?.rodando) return;
         const jogador = sala.jogadores.find(j => j.id === socket.id);
-        if (!jogador || sala.jogo.turn !== jogador.lado) return;
+        if (!jogador || sala.jogo.turn !== jogador.lado || sala.jogo.rollPhase) return;
 
-        if (sala.jogo.makeMove(from, to, jogador.lado)) {
+        if (sala.jogo.makeMove(moves)) {
             const estado = sala.jogo.getState();
-            sala.historico.push(`${jogador.nome} moveu de ${from} para ${to}`);
-            io.to(socket.sala).emit('jogadaFeita', { estado, historico: sala.historico });
+            sala.historico.push(`${jogador.nome} moveu ${moves.map(m => `${m.from}→${m.to}`).join(', ')}`);
+            io.to(socket.sala).emit('jogadaFeita', { estado, historico: sala.historico, moves });
 
             if (estado.gameOver) {
                 resetarSalaParaLobby(sala);
                 const vencedor = estado.winner === 1 ? 'Vermelho' : 'Branco';
-                io.to(socket.sala).emit('fimDeJogo', {
-                    motivo: 'fim_normal',
-                    vencedor: estado.winner,
-                    mensagem: `${vencedor} venceu a partida!`
-                });
-                io.to(socket.sala).emit('estadoLobby', {
-                    rodando: sala.rodando,
-                    jogadoresInfo: sala.jogadores.map(j => ({ nome: j.nome, pronto: j.pronto, lado: j.lado })),
-                    espectadores: sala.espectadores.map(e => e.nome)
-                });
+                io.to(socket.sala).emit('fimDeJogo', { motivo: 'fim_normal', vencedor: estado.winner, mensagem: `${vencedor} venceu!` });
+                io.to(socket.sala).emit('estadoLobby', { rodando: sala.rodando, jogadoresInfo: sala.jogadores.map(j => ({ nome: j.nome, pronto: j.pronto, lado: j.lado })), espectadores: sala.espectadores.map(e => e.nome) });
             } else {
-                // Se ainda há movimentos possíveis com os dados, continua; senão, encerra turno
-                // A lógica de troca de turno está em makeMove quando todos os dados são usados
+                // Se ainda há movimentos possíveis, o cliente continua; senão, o turno já foi passado em makeMove
             }
         } else {
             socket.emit('erro', 'Movimento inválido.');
@@ -368,81 +453,40 @@ io.on('connection', (socket) => {
     socket.on('enviarMensagem', (msg) => {
         const sala = socket.sala;
         if (!sala) return;
-        io.to(sala).emit('novaMensagem', {
-            remetente: socket.apelido,
-            texto: msg,
-            timestamp: Date.now()
-        });
+        io.to(sala).emit('novaMensagem', { remetente: socket.apelido, texto: msg, timestamp: Date.now() });
     });
 
     socket.on('desistir', () => {
         const sala = salas[socket.sala];
-        if (!sala || !sala.rodando) return;
+        if (!sala?.rodando) return;
         const jogador = sala.jogadores.find(j => j.id === socket.id);
         if (!jogador) return;
         const vencedor = jogador.lado === 1 ? -1 : 1;
         resetarSalaParaLobby(sala);
-        io.to(socket.sala).emit('fimDeJogo', {
-            motivo: 'desistencia',
-            vencedor,
-            mensagem: `${jogador.nome} desistiu.`
-        });
-        io.to(socket.sala).emit('estadoLobby', {
-            rodando: sala.rodando,
-            jogadoresInfo: sala.jogadores.map(j => ({ nome: j.nome, pronto: j.pronto, lado: j.lado })),
-            espectadores: sala.espectadores.map(e => e.nome)
-        });
-    });
-
-    socket.on('oferecerEmpate', () => {
-        // Implementação similar ao Mancala (omitida por brevidade, mas pode ser adicionada)
-    });
-
-    socket.on('responderEmpate', (resposta) => {
-        // Implementação similar ao Mancala
+        io.to(socket.sala).emit('fimDeJogo', { motivo: 'desistencia', vencedor, mensagem: `${jogador.nome} desistiu.` });
+        io.to(socket.sala).emit('estadoLobby', { rodando: sala.rodando, jogadoresInfo: sala.jogadores.map(j => ({ nome: j.nome, pronto: j.pronto, lado: j.lado })), espectadores: sala.espectadores.map(e => e.nome) });
     });
 
     socket.on('disconnect', () => {
         const sala = salas[socket.sala];
         if (!sala) return;
         console.log(`[Sala ${socket.sala}] ${socket.apelido} desconectou.`);
-
         const jogadorIdx = sala.jogadores.findIndex(j => j.id === socket.id);
         if (jogadorIdx !== -1) {
             sala.jogadores.splice(jogadorIdx, 1);
             if (sala.rodando) {
                 const vencedor = sala.jogadores[0]?.lado;
                 resetarSalaParaLobby(sala);
-                if (vencedor) {
-                    io.to(socket.sala).emit('fimDeJogo', {
-                        motivo: 'desconexao',
-                        vencedor,
-                        mensagem: 'Oponente desconectou.'
-                    });
-                }
-                io.to(socket.sala).emit('estadoLobby', {
-                    rodando: sala.rodando,
-                    jogadoresInfo: sala.jogadores.map(j => ({ nome: j.nome, pronto: j.pronto, lado: j.lado })),
-                    espectadores: sala.espectadores.map(e => e.nome)
-                });
+                if (vencedor) io.to(socket.sala).emit('fimDeJogo', { motivo: 'desconexao', vencedor, mensagem: 'Oponente desconectou.' });
+                io.to(socket.sala).emit('estadoLobby', { rodando: sala.rodando, jogadoresInfo: sala.jogadores.map(j => ({ nome: j.nome, pronto: j.pronto, lado: j.lado })), espectadores: sala.espectadores.map(e => e.nome) });
             }
         } else {
             sala.espectadores = sala.espectadores.filter(e => e.id !== socket.id);
         }
-
-        if (sala.jogadores.length === 0 && sala.espectadores.length === 0) {
-            delete salas[socket.sala];
-        } else {
-            io.to(socket.sala).emit('estadoLobby', {
-                rodando: sala.rodando,
-                jogadoresInfo: sala.jogadores.map(j => ({ nome: j.nome, pronto: j.pronto, lado: j.lado })),
-                espectadores: sala.espectadores.map(e => e.nome)
-            });
-        }
+        if (sala.jogadores.length === 0 && sala.espectadores.length === 0) delete salas[socket.sala];
+        else io.to(socket.sala).emit('estadoLobby', { rodando: sala.rodando, jogadoresInfo: sala.jogadores.map(j => ({ nome: j.nome, pronto: j.pronto, lado: j.lado })), espectadores: sala.espectadores.map(e => e.nome) });
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`🎲 Motor Gamão rodando na porta ${PORT}`);
-});
+server.listen(PORT, () => console.log(`🎲 Motor Gamão rodando na porta ${PORT}`));
