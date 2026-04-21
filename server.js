@@ -15,10 +15,9 @@ class Gamao {
     }
 
     reset() {
-        // Tabuleiro: índices 0-23 (pontos). Valor positivo = peças do jogador 1 (vermelho/preto), negativo = jogador 2 (branco)
         this.board = Array(24).fill(0);
-        this.bar = [0, 0];        // Peças na barra: índice 0 = jogador 1, 1 = jogador 2
-        this.home = [0, 0];       // Peças já removidas
+        this.bar = [0, 0];
+        this.home = [0, 0];
         // Posição inicial padrão
         this.board[0] = 2;
         this.board[11] = -5;
@@ -29,7 +28,7 @@ class Gamao {
         this.board[7] = -3;
         this.board[23] = -2;
 
-        this.turn = 1;            // 1 = jogador 1, -1 = jogador 2
+        this.turn = 1;            // 1 = jogador 1 (Vermelho), -1 = jogador 2 (Branco)
         this.dice = [0, 0];
         this.diceUsed = [false, false];
         this.rollPhase = true;
@@ -65,52 +64,50 @@ class Gamao {
         return [...this.dice];
     }
 
-    // Retorna array de movimentos legais para o jogador atual
+    // Retorna array de movimentos legais para o jogador atual (formato usado pelo front-end)
     getLegalMoves(player) {
         if (this.rollPhase || this.gameOver || this.turn !== player) return [];
         const moves = [];
         const barIdx = player === 1 ? 0 : 1;
         const hasBar = this.bar[barIdx] > 0;
 
-        // Se há peças na barra, só pode mover de lá
         if (hasBar) {
             for (let dieIdx = 0; dieIdx < 2; dieIdx++) {
                 if (this.diceUsed[dieIdx]) continue;
                 const die = this.dice[dieIdx];
                 const to = player === 1 ? die - 1 : 24 - die;
                 if (this.isValidMove(24 + barIdx, to, player, dieIdx)) {
-                    moves.push({ from: 24 + barIdx, to, dieIndices: [dieIdx] });
+                    moves.push({ from: 24 + barIdx, to });
                 }
             }
             return moves;
         }
 
-        // Movimentos normais ou bearing off
-        const homeStart = player === 1 ? 18 : 0;
-        const homeEnd = player === 1 ? 23 : 5;
-        const canBearOff = this.canBearOff(player);
-
-        // Para cada combinação possível de dados (um ou dois, dependendo se são iguais)
         const diceOptions = this.generateDiceOptions();
-
         for (let opt of diceOptions) {
             const dieValues = opt.values;
             const dieIndices = opt.indices;
-            // Gera sequências de movimentos usando esses valores
             this.generateMoveSequences(player, dieValues, dieIndices, [], moves);
         }
 
-        // Filtra movimentos duplicados e prioriza usar o maior número de dados possível
-        const maxDiceUsed = Math.max(...moves.map(m => m.dieIndices.length), 0);
-        return moves.filter(m => m.dieIndices.length === maxDiceUsed);
+        // Remove duplicatas e prioriza usar o máximo de dados possível
+        const uniqueMoves = [];
+        const seen = new Set();
+        for (let m of moves) {
+            const key = m.moves.map(mv => `${mv.from}-${mv.to}`).join('|');
+            if (!seen.has(key)) {
+                seen.add(key);
+                uniqueMoves.push(m);
+            }
+        }
+        const maxDice = Math.max(...uniqueMoves.map(m => m.dieIndices.length), 0);
+        return uniqueMoves.filter(m => m.dieIndices.length === maxDice);
     }
 
     generateDiceOptions() {
         if (this.dice[0] === this.dice[1]) {
-            // Dados iguais: quatro movimentos
             return [{ values: [this.dice[0], this.dice[0], this.dice[0], this.dice[0]], indices: [0,1,0,1] }];
         } else {
-            // Duas ordens possíveis
             return [
                 { values: [this.dice[0], this.dice[1]], indices: [0,1] },
                 { values: [this.dice[1], this.dice[0]], indices: [1,0] }
@@ -121,31 +118,28 @@ class Gamao {
     generateMoveSequences(player, remainingDice, remainingIndices, currentSeq, moves) {
         if (remainingDice.length === 0) {
             if (currentSeq.length > 0) {
-                moves.push({ moves: currentSeq, dieIndices: remainingIndices });
+                moves.push({ moves: currentSeq, dieIndices: remainingIndices.slice(0, currentSeq.length) });
             }
             return;
         }
 
         const die = remainingDice[0];
         const dieIdx = remainingIndices[0];
-        const legalSingleMoves = this.getSingleMoves(player, die, dieIdx);
-        if (legalSingleMoves.length === 0) {
-            // Se não há movimento possível com este dado, não pode usá-lo; a sequência termina aqui
+        const singleMoves = this.getSingleMoves(player, die, dieIdx);
+        if (singleMoves.length === 0) {
             if (currentSeq.length > 0) {
                 moves.push({ moves: currentSeq, dieIndices: remainingIndices.slice(0, currentSeq.length) });
             }
             return;
         }
 
-        for (let move of legalSingleMoves) {
-            // Simula o movimento para verificar o estado resultante
+        for (let move of singleMoves) {
             const simState = this.simulateMove(move.from, move.to, player);
             const simGame = new Gamao();
             simGame.board = [...simState.board];
             simGame.bar = [...simState.bar];
             simGame.home = [...simState.home];
             simGame.turn = player;
-            // Gera recursivamente os próximos movimentos
             simGame.generateMoveSequences(player, remainingDice.slice(1), remainingIndices.slice(1), 
                 [...currentSeq, move], moves);
         }
@@ -164,40 +158,29 @@ class Gamao {
             return moves;
         }
 
-        const homeStart = player === 1 ? 18 : 0;
-        const homeEnd = player === 1 ? 23 : 5;
         const canBearOff = this.canBearOff(player);
-
-        // Movimentos a partir de pontos com peças do jogador
         for (let from = 0; from < 24; from++) {
             const count = this.board[from];
             if ((player === 1 && count <= 0) || (player === -1 && count >= 0)) continue;
-
             const to = player === 1 ? from + die : from - die;
             if (to >= 0 && to <= 23) {
                 if (this.isValidMove(from, to, player, dieIdx)) {
                     moves.push({ from, to });
                 }
             } else if (canBearOff) {
-                // Bearing off: para sair, precisa de valor exato ou ser a peça mais distante
-                const requiredDie = player === 1 ? 24 - from : from + 1;
-                if (die === requiredDie) {
-                    if (this.isValidMove(from, -1, player, dieIdx)) {
-                        moves.push({ from, to: -1 });
-                    }
-                } else if (die > requiredDie) {
-                    // Verifica se não há peças mais distantes que exigiriam um dado maior
+                const required = player === 1 ? 24 - from : from + 1;
+                if (die === required) {
+                    if (this.isValidMove(from, -1, player, dieIdx)) moves.push({ from, to: -1 });
+                } else if (die > required) {
                     let hasFurther = false;
                     for (let i = 0; i < 24; i++) {
                         const cnt = this.board[i];
                         if ((player === 1 && cnt > 0) || (player === -1 && cnt < 0)) {
                             const dist = player === 1 ? 24 - i : i + 1;
-                            if (dist > requiredDie) { hasFurther = true; break; }
+                            if (dist > required) { hasFurther = true; break; }
                         }
                     }
-                    if (!hasFurther && this.isValidMove(from, -1, player, dieIdx)) {
-                        moves.push({ from, to: -1 });
-                    }
+                    if (!hasFurther && this.isValidMove(from, -1, player, dieIdx)) moves.push({ from, to: -1 });
                 }
             }
         }
@@ -207,38 +190,33 @@ class Gamao {
     isValidMove(from, to, player, dieIdx) {
         if (this.gameOver) return false;
         if (this.diceUsed[dieIdx]) return false;
-
         const barIdx = player === 1 ? 0 : 1;
         const hasBar = this.bar[barIdx] > 0;
         if (hasBar && from !== 24 + barIdx) return false;
         if (!hasBar && (from === 24 || from === 25)) return false;
 
-        // Verifica se a peça pertence ao jogador
         let pieceCount;
         if (from === 24 || from === 25) pieceCount = this.bar[from - 24];
         else pieceCount = this.board[from];
         if ((player === 1 && pieceCount <= 0) || (player === -1 && pieceCount >= 0)) return false;
 
-        // Se destino é fora (bearing off)
         if (to === -1) {
             if (!this.canBearOff(player)) return false;
-            const requiredDie = player === 1 ? 24 - from : from + 1;
+            const required = player === 1 ? 24 - from : from + 1;
             const die = this.dice[dieIdx];
-            if (die < requiredDie) return false;
-            if (die > requiredDie) {
-                // Verifica se não há peças mais distantes
+            if (die < required) return false;
+            if (die > required) {
                 for (let i = 0; i < 24; i++) {
                     const cnt = this.board[i];
                     if ((player === 1 && cnt > 0) || (player === -1 && cnt < 0)) {
                         const dist = player === 1 ? 24 - i : i + 1;
-                        if (dist > requiredDie) return false;
+                        if (dist > required) return false;
                     }
                 }
             }
             return true;
         }
 
-        // Movimento normal
         const die = this.dice[dieIdx];
         let distance;
         if (from === 24 || from === 25) {
@@ -249,10 +227,8 @@ class Gamao {
             if (distance !== die) return false;
         }
 
-        // Verifica bloqueio
         const destCount = this.board[to];
         if ((player === 1 && destCount < -1) || (player === -1 && destCount > 1)) return false;
-
         return true;
     }
 
@@ -291,10 +267,8 @@ class Gamao {
     }
 
     makeMove(moves) {
-        // moves: array de {from, to} na ordem
         if (!moves || moves.length === 0) return false;
         const player = this.turn;
-        const diceCopy = [...this.dice];
         const usedIndices = [];
 
         for (let move of moves) {
@@ -304,7 +278,6 @@ class Gamao {
             if (dieIdx === -1) return false;
             usedIndices.push(dieIdx);
 
-            // Executa movimento real
             if (move.from === 24 || move.from === 25) {
                 this.bar[move.from - 24]--;
             } else {
@@ -330,7 +303,6 @@ class Gamao {
             this.diceUsed = [false, false];
         }
 
-        // Verifica vitória
         if (this.home[0] === 15) {
             this.gameOver = true;
             this.winner = 1;
@@ -421,7 +393,8 @@ io.on('connection', (socket) => {
         if (!jogador || sala.jogo.turn !== jogador.lado || !sala.jogo.rollPhase) return;
         const dice = sala.jogo.rollDice();
         if (dice) {
-            io.to(socket.sala).emit('dadosRolados', { dice, turn: sala.jogo.turn });
+            const legalMoves = sala.jogo.getLegalMoves(jogador.lado);
+            io.to(socket.sala).emit('dadosRolados', { dice, turn: sala.jogo.turn, legalMoves });
             io.to(socket.sala).emit('estadoAtual', sala.jogo.getState());
         }
     });
@@ -435,15 +408,14 @@ io.on('connection', (socket) => {
         if (sala.jogo.makeMove(moves)) {
             const estado = sala.jogo.getState();
             sala.historico.push(`${jogador.nome} moveu ${moves.map(m => `${m.from}→${m.to}`).join(', ')}`);
-            io.to(socket.sala).emit('jogadaFeita', { estado, historico: sala.historico, moves });
+            const legalMoves = estado.rollPhase ? [] : sala.jogo.getLegalMoves(estado.turn);
+            io.to(socket.sala).emit('jogadaFeita', { estado, historico: sala.historico, moves, legalMoves });
 
             if (estado.gameOver) {
                 resetarSalaParaLobby(sala);
                 const vencedor = estado.winner === 1 ? 'Vermelho' : 'Branco';
                 io.to(socket.sala).emit('fimDeJogo', { motivo: 'fim_normal', vencedor: estado.winner, mensagem: `${vencedor} venceu!` });
                 io.to(socket.sala).emit('estadoLobby', { rodando: sala.rodando, jogadoresInfo: sala.jogadores.map(j => ({ nome: j.nome, pronto: j.pronto, lado: j.lado })), espectadores: sala.espectadores.map(e => e.nome) });
-            } else {
-                // Se ainda há movimentos possíveis, o cliente continua; senão, o turno já foi passado em makeMove
             }
         } else {
             socket.emit('erro', 'Movimento inválido.');
