@@ -19,18 +19,18 @@ class Gamao {
         this.bar = [0, 0];
         this.home = [0, 0];
 
-        // ========== DISTRIBUIÇÃO INICIAL CLÁSSICA (ESPELHADA) ==========
-        // Jogador 1 (Vermelho / positivo) – casas 1, 12, 17, 19
-        this.board[0] = 2;   // casa 1
-        this.board[11] = 5;  // casa 12
-        this.board[16] = 3;  // casa 17
-        this.board[18] = 5;  // casa 19
+        // ========== DISTRIBUIÇÃO INICIAL OFICIAL ==========
+        // Jogador 1 (Vermelho / positivo)
+        this.board[0] = 2;   // ponto 1
+        this.board[11] = 5;  // ponto 12
+        this.board[16] = 3;  // ponto 17
+        this.board[18] = 5;  // ponto 19
 
-        // Jogador 2 (Branco / negativo) – casas 24, 13, 8, 6 (espelhadas)
-        this.board[23] = -2; // casa 24
-        this.board[12] = -5; // casa 13
-        this.board[7] = -3;  // casa 8
-        this.board[5] = -5;  // casa 6
+        // Jogador 2 (Branco / negativo) - espelhado
+        this.board[23] = -2; // ponto 24
+        this.board[12] = -5; // ponto 13
+        this.board[7] = -3;  // ponto 8
+        this.board[5] = -5;  // ponto 6
 
         this.turn = 1;            // 1 = jogador 1 (Vermelho), -1 = jogador 2 (Branco)
         this.dice = [0, 0];
