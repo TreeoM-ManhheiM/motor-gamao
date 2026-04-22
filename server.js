@@ -18,15 +18,19 @@ class Gamao {
         this.board = Array(24).fill(0);
         this.bar = [0, 0];
         this.home = [0, 0];
-        // Posição inicial padrão
-        this.board[0] = 2;
-        this.board[11] = -5;
-        this.board[16] = -3;
-        this.board[18] = -5;
-        this.board[5] = -5;
-        this.board[12] = 5;
-        this.board[7] = -3;
-        this.board[23] = -2;
+
+        // ========== DISTRIBUIÇÃO INICIAL CLÁSSICA ==========
+        // Jogador 1 (Vermelho / positivo)
+        this.board[0] = 2;   // casa 1
+        this.board[11] = 5;  // casa 12
+        this.board[16] = 3;  // casa 17
+        this.board[18] = 5;  // casa 19
+
+        // Jogador 2 (Branco / negativo)
+        this.board[5] = -5;  // casa 6
+        this.board[7] = -3;  // casa 8
+        this.board[12] = -5; // casa 13
+        this.board[23] = -2; // casa 24
 
         this.turn = 1;            // 1 = jogador 1 (Vermelho), -1 = jogador 2 (Branco)
         this.dice = [0, 0];
